@@ -29,7 +29,8 @@ int main(int argc, char * argv[]) {
             *comprueba; // Guarda el resultado final (calculado secuencialmente), su valor
                         // debe ser igual al de 'y'
 
-    long compruebaSum; // Para mostrar resultado de comprobación para valores de n > 24
+    long compruebaSum = 0; // Para mostrar resultado de comprobación para valores de n > 24
+    long ySum = 0; // Para mostrar resultado de comprobación para valores de n > 24
 
     double tInicio, // Tiempo en el que comienza la ejecucion
             tFin; // Tiempo en el que acaba la ejecucion
@@ -49,8 +50,9 @@ int main(int argc, char * argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &numeroProcesadores);
     MPI_Comm_rank(MPI_COMM_WORLD, &idProceso);
 
-    int nFilas = n / numeroProcesadores;
-    A = new long *[n * nFilas]; // Reservamos las filas de la matriz
+    int nFilas = n / numeroProcesadores; // Numero de filas que procesa cada procesador
+    int nElem = nFilas * n; // Numero de elementos que procesa cada procesador
+    A = new long *[nElem]; // Reservamos las filas de la matriz
     x = new long [n]; // El vector sera del mismo tamaño que una fila de la matriz
 
     // Solo el proceso 0 ejecuta el siguiente bloque
@@ -93,26 +95,27 @@ int main(int argc, char * argv[]) {
             comprueba[i] = 0;
             for (unsigned int j = 0; j < n; j++) {
                 comprueba[i] += A[i][j] * x[j];
+                compruebaSum += A[i][j] * x[j];
             }
         }
     } // Termina el trozo de codigo que ejecuta solo 0
 
     // Reservamos espacio para la fila local de cada proceso
-    misFilas = new long [nFilas * n];
+    misFilas = new long [nElem];
 
     // Repartimos una nFilas a cada proceso
     MPI_Scatter(A[0], // Matriz que vamos a compartir
-            numeroProcesadores, // Numero de columnas a compartir
+            nElem, // Numero de datos a compartir
             MPI_LONG, // Tipo de dato a enviar
             misFilas, // Vector en el que almacenar los datos
-            numeroProcesadores, // Numero de columnas a compartir
+            nElem, // Numero de datos a compartir
             MPI_LONG, // Tipo de dato a recibir
             0, // Proceso raiz que envia los datos
             MPI_COMM_WORLD); // Comunicador utilizado (En este caso, el global)
 
     // Compartimos el vector entre todas los procesos
     MPI_Bcast(x, // Dato a compartir
-            numeroProcesadores, // Numero de elementos que se van a enviar y recibir
+            n, // Numero de elementos que se van a enviar y recibir
             MPI_LONG, // Tipo de dato que se compartira
             0, // Proceso raiz que envia los datos
             MPI_COMM_WORLD); // Comunicador utilizado (En este caso, el global)
@@ -124,9 +127,12 @@ int main(int argc, char * argv[]) {
     // Inicio de medicion de tiempo
     tInicio = MPI_Wtime();
 
-    long subFinal = 0;
-    for (unsigned int i = 0; i < numeroProcesadores; i++) {
-        subFinal += misFilas[i] * x[i];
+    long* subFinal = new long [nFilas];
+    for (unsigned int i = 0; i < nFilas; i++) {
+        subFinal[i] = 0;
+        for (unsigned int j = 0; j < n; j++) {
+            subFinal[i] += misFilas[(i * n) + j] * x[j];
+        }
     }
 
     // Otra barrera para asegurar que todas ejecuten el siguiente trozo de c�digo lo
@@ -139,11 +145,11 @@ int main(int argc, char * argv[]) {
     // y se recoge en un vector, Gather se asegura de que la recolecci�n se haga
     // en el mismo orden en el que se hace el Scatter, con lo que cada escalar
     // acaba en su posicion correspondiente del vector.
-    MPI_Gather(&subFinal, // Dato que envia cada proceso
-            1, // Numero de elementos que se envian
+    MPI_Gather(subFinal, // Dato que envia cada proceso
+            nFilas, // Numero de elementos que se envian
             MPI_LONG, // Tipo del dato que se envia
             y, // Vector en el que se recolectan los datos
-            1, // Numero de datos que se esperan recibir por cada proceso
+            nFilas, // Numero de datos que se esperan recibir por cada proceso
             MPI_LONG, // Tipo del dato que se recibira
             0, // proceso que va a recibir los datos
             MPI_COMM_WORLD); // Canal de comunicacion (Comunicador Global)
@@ -160,11 +166,15 @@ int main(int argc, char * argv[]) {
         unsigned int errores = 0;
 
         cout << "El resultado obtenido y el esperado son:" << endl;
-        for (unsigned int i = 0; i < numeroProcesadores; i++) {
-            cout << "\t" << y[i] << "\t|\t" << comprueba[i] << endl;
+        for (unsigned int i = 0; i < n; i++) {
+            ySum += y[i];
+            if (n < 24) {
+                cout << "\t" << y[i] << "\t|\t" << comprueba[i] << endl;
+            }
             if (comprueba[i] != y[i])
                 errores++;
         }
+        cout << "\tSUMA DE VECTORES: " << ySum << "\t|\t" << compruebaSum << endl;
 
         delete [] y;
         delete [] comprueba;
