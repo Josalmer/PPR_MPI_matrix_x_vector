@@ -4,10 +4,11 @@
  Author      : Jose Saldaña Mercado
  Version     :
  Copyright   : GNU Open Souce and Free license
- Description : Tutorial 5. Multiplicacion de Matrix por Vector.
+ Description : Multiplicacion de Matrix por Vector.
     Multiplica un vector por una matriz.
- Build: mpicxx matriz_x_vector.cpp -o exe
- Run: mpirun --oversubscribe -np 4 exe
+
+ Build: mpicxx matriz_x_vector.cpp -o mxv
+ Run: mpirun --oversubscribe -np 4 mxv
  ============================================================================
  */
 
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <mpi.h>
+#include <cmath>
 
 using namespace std;
 
@@ -33,7 +35,10 @@ int main(int argc, char * argv[]) {
     long ySum = 0; // Para mostrar resultado de comprobación para valores de n > 24
 
     double tInicio, // Tiempo en el que comienza la ejecucion
-            tFin; // Tiempo en el que acaba la ejecucion
+            tFin, // Tiempo en el que acaba la ejecucion
+            tSecuencialIni,
+            tSecuencialFin,
+            tSecuencial;
 
     int n;
     if (argc != 2) {
@@ -55,6 +60,12 @@ int main(int argc, char * argv[]) {
     A = new long *[nElem]; // Reservamos las filas de la matriz
     x = new long [n]; // El vector sera del mismo tamaño que una fila de la matriz
 
+    // Variables para n % numeroProcesadores != 0
+    int filasUltimo = n - ((numeroProcesadores - 1) * nFilas);
+    int *elementosPorProcesador = new int[numeroProcesadores];
+    int *displenv = new int[numeroProcesadores];
+    int *displrecv = new int[numeroProcesadores];
+
     // Solo el proceso 0 ejecuta el siguiente bloque
     if (idProceso == 0) {
         A[0] = new long [n * n];
@@ -65,14 +76,15 @@ int main(int argc, char * argv[]) {
         y = new long [n];
 
         // Rellenamos 'A' y 'x' con valores aleatorios
+        cout << "Inicio carga de datos........" << endl;
         srand(time(0));
-            for (unsigned int i = 0; i < n; i++) {
-                for (unsigned int j = 0; j < n; j++) {
-                    A[i][j] = rand() % 1000;
-                }
-                x[i] = rand() % 100;
+        for (unsigned int i = 0; i < n; i++) {
+            for (unsigned int j = 0; j < n; j++) {
+                A[i][j] = rand() % 1000;
             }
-            cout << "\n";
+            x[i] = rand() % 100;
+        }
+        cout << "........Fin carga de datos" << endl;
 
         if (n < 24) {
             cout << "La matriz y el vector generados son " << endl;
@@ -88,8 +100,41 @@ int main(int argc, char * argv[]) {
             cout << "\n";
         }
 
+        // Calculamos valores para n % numeroProcesadores != 0 -------------------
+        cout << numeroProcesadores - 1 << " procesadores procesan " << nFilas << " filas y el ultimo procesa " << filasUltimo << " filas" << endl;
+
+        // Filas de cada procesador
+        for (int i = 0; i < numeroProcesadores -1; i++) {
+            elementosPorProcesador[i] = nFilas * n;
+        }
+        elementosPorProcesador[numeroProcesadores - 1] = filasUltimo * n;
+        cout << "Elementos que procesa cada procesador: [";
+        for (int i = 0; i < numeroProcesadores; i++) {
+            cout << " " << elementosPorProcesador[i];
+        }
+        cout << " ]" << endl;
+
+        // Desplazamiento en vectores
+        for (int i = 0; i < numeroProcesadores; i++) {
+            displenv[i] = i * nFilas * n;
+            displrecv[i] = i * nFilas;
+        }
+        cout << "Desplazamiento de envío para cada vector: [";
+        for (int i = 0; i < numeroProcesadores; i++) {
+            cout << " " << displenv[i];
+        }
+        cout << " ]" << endl;
+        cout << "Desplazamiento de recepción para cada vector: [";
+        for (int i = 0; i < numeroProcesadores; i++) {
+            cout << " " << displrecv[i];
+        }
+        cout << " ]" << endl;
+
         // Reservamos espacio para la comprobacion
         comprueba = new long [n];
+        // Realizamos el algoritmo secuencial para comprobar
+        cout << "Inicio algoritmo secuencial........" << endl;
+	    tSecuencialIni = clock();
         // Lo calculamos de forma secuencial
         for (unsigned int i = 0; i < n; i++) {
             comprueba[i] = 0;
@@ -98,14 +143,23 @@ int main(int argc, char * argv[]) {
                 compruebaSum += A[i][j] * x[j];
             }
         }
+	    tSecuencialFin = clock();
+        cout << "........Fin algoritmo secuencial" << endl;
+        tSecuencial = (tSecuencialFin - tSecuencialIni) / CLOCKS_PER_SEC;
     } // Termina el trozo de codigo que ejecuta solo 0
+
+    // Ajustamos nº de filas del ultimo procesador
+    if (idProceso == (numeroProcesadores - 1)) {
+        nFilas = filasUltimo;
+        nElem = nFilas * n;
+    }
 
     // Reservamos espacio para la fila local de cada proceso
     misFilas = new long [nElem];
 
-    // Repartimos una nFilas a cada proceso
-    MPI_Scatter(A[0], // Matriz que vamos a compartir
-            nElem, // Numero de datos a compartir
+    MPI_Scatterv(A[0], // Matriz que vamos a compartir
+            elementosPorProcesador, // Numero de datos a compartir
+            displenv, // Desplazamiento dentro de los datos a compartir
             MPI_LONG, // Tipo de dato a enviar
             misFilas, // Vector en el que almacenar los datos
             nElem, // Numero de datos a compartir
@@ -127,10 +181,12 @@ int main(int argc, char * argv[]) {
     // Inicio de medicion de tiempo
     tInicio = MPI_Wtime();
 
-    long* subFinal = new long [nFilas];
+    long *subFinal = new long [nFilas];
+
     for (unsigned int i = 0; i < nFilas; i++) {
         subFinal[i] = 0;
         for (unsigned int j = 0; j < n; j++) {
+            // cout << "proc=" << idProceso << ", i=" << i << ", j=" << j << ", subfinal[" << i << "] += " << misFilas[(i * n) + j] << " * " << x[j] << endl;
             subFinal[i] += misFilas[(i * n) + j] * x[j];
         }
     }
@@ -145,11 +201,12 @@ int main(int argc, char * argv[]) {
     // y se recoge en un vector, Gather se asegura de que la recolecci�n se haga
     // en el mismo orden en el que se hace el Scatter, con lo que cada escalar
     // acaba en su posicion correspondiente del vector.
-    MPI_Gather(subFinal, // Dato que envia cada proceso
+    MPI_Gatherv(subFinal, // Dato que envia cada proceso
             nFilas, // Numero de elementos que se envian
             MPI_LONG, // Tipo del dato que se envia
             y, // Vector en el que se recolectan los datos
-            nFilas, // Numero de datos que se esperan recibir por cada proceso
+            elementosPorProcesador, // Numero de datos que se esperan recibir por cada proceso
+            displrecv, // displs
             MPI_LONG, // Tipo del dato que se recibira
             0, // proceso que va a recibir los datos
             MPI_COMM_WORLD); // Canal de comunicacion (Comunicador Global)
@@ -184,7 +241,9 @@ int main(int argc, char * argv[]) {
             cout << "Hubo " << errores << " errores." << endl;
         } else {
             cout << "No hubo errores" << endl;
-            cout << "El tiempo tardado ha sido " << tFin - tInicio << " segundos." << endl;
+            cout << "El tiempo paralelo ha sido " << tFin - tInicio << " segundos." << endl;
+            cout << "El tiempo secuencial ha sido " << tSecuencial << " segundos." << endl;
+            cout << "La ganancia ha sido " << tSecuencial/(tFin - tInicio) << endl;
         }
 
     }
