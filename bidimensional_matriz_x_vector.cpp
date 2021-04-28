@@ -24,10 +24,10 @@ int main(int argc, char * argv[]) {
 
     int numeroProcesadores,
             idProceso;
-    long **A, // Matriz a multiplicar
+    long    *A, // Matriz a multiplicar
             *x, // Vector que vamos a multiplicar
             *y, // Vector donde almacenamos el resultado
-            *misFilas, // Las filas que almacena localmente un proceso
+            *subMatriz, // La submatriz que almacena localmente un proceso
             *comprueba; // Guarda el resultado final (calculado secuencialmente), su valor
                         // debe ser igual al de 'y'
 
@@ -55,32 +55,36 @@ int main(int argc, char * argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &numeroProcesadores);
     MPI_Comm_rank(MPI_COMM_WORLD, &idProceso);
 
-    int nFilas = n / numeroProcesadores; // Numero de filas que procesa cada procesador
-    int nElem = nFilas * n; // Numero de elementos que procesa cada procesador
-    A = new long *[nElem]; // Reservamos las filas de la matriz
+    int raizP = sqrt(numeroProcesadores);
+
+    if (n % raizP != 0) {
+        if (idProceso == 0) {
+            cout << "Uso: n debe ser multiplo de sqrt(numeroProcesadores)" << endl;
+        }
+        MPI_Finalize();
+        return (0);
+    }
+
+    int tam = n / raizP; // Dimensión de las submatrices
+    int nElem = tam * tam; // Numero de elementos que procesa cada procesador
+    int filaP, columnaP; // indice de cada proceso dentro de la submatriz
+    A = new long [nElem]; // Reservamos los elementos de cada proceso
     x = new long [n]; // El vector sera del mismo tamaño que una fila de la matriz
 
-    // Variables para n % numeroProcesadores != 0
-    int filasUltimo = n - ((numeroProcesadores - 1) * nFilas);
-    int *elementosPorProcesador = new int[numeroProcesadores];
-    int *displenv = new int[numeroProcesadores];
-    int *displrecv = new int[numeroProcesadores];
+    MPI_Datatype MPI_BLOQUE; // Tipo de dato para reordenar la matriz y poder enviar submatrices como elementos consecutivos
 
     // Solo el proceso 0 ejecuta el siguiente bloque
     if (idProceso == 0) {
-        A[0] = new long [n * n];
-        for (unsigned int i = 1; i < n; i++) {
-            A[i] = A[i - 1] + n; // Para poder referenciar filas dentro de la matriz A, reservada en memoria como un vector largo
-        }
+        long *auxiliar = new long[n * n];
         // Reservamos especio para el resultado
         y = new long [n];
 
-        // Rellenamos 'A' y 'x' con valores aleatorios
+        // Rellenamos 'auxiliar' y 'x' con valores aleatorios
         cout << "Inicio carga de datos........" << endl;
         srand(time(0));
         for (unsigned int i = 0; i < n; i++) {
             for (unsigned int j = 0; j < n; j++) {
-                A[i][j] = rand() % 1000;
+                auxiliar[i * n + j] = rand() % 1000;
             }
             x[i] = rand() % 100;
         }
@@ -91,7 +95,7 @@ int main(int argc, char * argv[]) {
             for (unsigned int i = 0; i < n; i++) {
                 for (unsigned int j = 0; j < n; j++) {
                     if (j == 0) cout << "[";
-                    cout << A[i][j];
+                    cout << auxiliar[i * n + j];
                     if (j == n - 1) cout << "]";
                     else cout << "  ";
                 }
@@ -99,36 +103,6 @@ int main(int argc, char * argv[]) {
             }
             cout << "\n";
         }
-
-        // Calculamos valores para n % numeroProcesadores != 0 -------------------
-        cout << numeroProcesadores - 1 << " procesadores procesan " << nFilas << " filas y el ultimo procesa " << filasUltimo << " filas" << endl;
-
-        // Filas de cada procesador
-        for (int i = 0; i < numeroProcesadores -1; i++) {
-            elementosPorProcesador[i] = nFilas * n;
-        }
-        elementosPorProcesador[numeroProcesadores - 1] = filasUltimo * n;
-        cout << "Elementos que procesa cada procesador: [";
-        for (int i = 0; i < numeroProcesadores; i++) {
-            cout << " " << elementosPorProcesador[i];
-        }
-        cout << " ]" << endl;
-
-        // Desplazamiento en vectores
-        for (int i = 0; i < numeroProcesadores; i++) {
-            displenv[i] = i * nFilas * n;
-            displrecv[i] = i * nFilas;
-        }
-        cout << "Desplazamiento de envío para cada vector: [";
-        for (int i = 0; i < numeroProcesadores; i++) {
-            cout << " " << displenv[i];
-        }
-        cout << " ]" << endl;
-        cout << "Desplazamiento de recepción para cada vector: [";
-        for (int i = 0; i < numeroProcesadores; i++) {
-            cout << " " << displrecv[i];
-        }
-        cout << " ]" << endl;
 
         // Reservamos espacio para la comprobacion
         comprueba = new long [n];
@@ -139,7 +113,7 @@ int main(int argc, char * argv[]) {
         for (unsigned int i = 0; i < n; i++) {
             comprueba[i] = 0;
             for (unsigned int j = 0; j < n; j++) {
-                comprueba[i] += A[i][j] * x[j];
+                comprueba[i] += auxiliar[i * n + j] * x[j];
             }
         }
 	    tSecuencialFin = clock();
@@ -149,34 +123,64 @@ int main(int argc, char * argv[]) {
         for (unsigned int i = 0; i < n; i++) {
             compruebaSum += comprueba[i];
         }
+
+        // Reordenamos matriz A ------------------------------------
+        // Defino el tipo bloque cuadrado
+        MPI_Type_vector (tam, tam, n, MPI_LONG, &MPI_BLOQUE);
+        MPI_Type_commit (&MPI_BLOQUE);
+
+        A = new long [n * n];
+
+        cout << "NumeroP: " << numeroProcesadores << ", raizP: " << raizP << ", tam: " << tam << ", n: " << n << ", nElem: " << nElem << endl;
+        
+        int comienzo, posicion;
+        for (int i = 0, posicion = 0; i < numeroProcesadores; i++) {
+            // Calculo la posicion de comienzo de cada submatriz
+            filaP = i / raizP;
+            columnaP = i % raizP;
+            comienzo = (columnaP * tam) + (filaP * tam * tam * raizP);
+            MPI_Pack(&auxiliar[comienzo], 1, MPI_BLOQUE, A, sizeof(long) * n * n, &posicion, MPI_COMM_WORLD);
+        }
+        // Libero memoria de matriz auxiliar
+        delete [] auxiliar;
+        MPI_Type_free (&MPI_BLOQUE);
+        // ---------------------------------------------------------
+        if (n < 24) {
+            cout << "La matriz reordenada es " << endl;
+            for (unsigned int i = 0; i < n; i++) {
+                for (unsigned int j = 0; j < n; j++) {
+                    if (j == 0) cout << "[";
+                    cout << A[i * n + j];
+                    if (j == n - 1) cout << "]";
+                    else cout << "  ";
+                }
+                cout << endl;
+            }
+            cout << "\n";
+        }
+
     } // Termina el trozo de codigo que ejecuta solo 0
 
-    // Ajustamos nº de filas del ultimo procesador
-    if (idProceso == (numeroProcesadores - 1)) {
-        nFilas = filasUltimo;
-        nElem = nFilas * n;
-    }
-
     // Reservamos espacio para la fila local de cada proceso
-    misFilas = new long [nElem];
+    subMatriz = new long [nElem];
 
-    MPI_Scatterv(A[0], // Matriz que vamos a compartir
-            elementosPorProcesador, // Numero de datos a compartir
-            displenv, // Desplazamiento dentro de los datos a compartir
-            MPI_LONG, // Tipo de dato a enviar
-            misFilas, // Vector en el que almacenar los datos
-            nElem, // Numero de datos a compartir
-            MPI_LONG, // Tipo de dato a recibir
-            0, // Proceso raiz que envia los datos
-            MPI_COMM_WORLD); // Comunicador utilizado (En este caso, el global)
+    // Creamos comunicadores que seran necesarios:
+    MPI_Comm filas, columnas, diagonal; // nuevos comunicadores
 
-    // Compartimos el vector entre todas los procesos
-    MPI_Bcast(x, // Dato a compartir
-            n, // Numero de elementos que se van a enviar y recibir
-            MPI_LONG, // Tipo de dato que se compartira
-            0, // Proceso raiz que envia los datos
-            MPI_COMM_WORLD); // Comunicador utilizado (En este caso, el global)
+    filaP = idProceso / raizP;
+    MPI_Comm_split(MPI_COMM_WORLD, // a partir del comunicador global.
+        filaP, // los de la misma fila entraran en el mismo comunicador
+        idProceso, // indica el orden de asignacion de rango dentro de los nuevos comunicadores
+        &filas); // Referencia al nuevo comunicador creado.
 
+    columnaP = idProceso % raizP;
+    MPI_Comm_split(MPI_COMM_WORLD, columnaP, idProceso, &columnas);
+
+    int inDiagonal = MPI_UNDEFINED;
+    if (filaP == columnaP) {
+        inDiagonal = 1;
+    }
+    MPI_Comm_split(MPI_COMM_WORLD, inDiagonal, idProceso, &diagonal);
 
     // Hacemos una barrera para asegurar que todas los procesos comiencen la ejecucion
     // a la vez, para tener mejor control del tiempo empleado
@@ -184,13 +188,13 @@ int main(int argc, char * argv[]) {
     // Inicio de medicion de tiempo
     tInicio = MPI_Wtime();
 
-    long *subFinal = new long [nFilas];
+    long *subFinal = new long [raizP];
 
-    for (unsigned int i = 0; i < nFilas; i++) {
+    for (unsigned int i = 0; i < raizP; i++) {
         subFinal[i] = 0;
         for (unsigned int j = 0; j < n; j++) {
-            // cout << "proc=" << idProceso << ", i=" << i << ", j=" << j << ", subfinal[" << i << "] += " << misFilas[(i * n) + j] << " * " << x[j] << endl;
-            subFinal[i] += misFilas[(i * n) + j] * x[j];
+            // cout << "proc=" << idProceso << ", i=" << i << ", j=" << j << ", subfinal[" << i << "] += " << subMatriz[(i * n) + j] << " * " << x[j] << endl;
+            subFinal[i] += subMatriz[(i * n) + j] * x[j];
         }
     }
 
@@ -200,25 +204,6 @@ int main(int argc, char * argv[]) {
     // fin de medicion de tiempo
     tFin = MPI_Wtime();
 
-    // Recogemos los datos de la multiplicacion, por cada proceso sera un escalar
-    // y se recoge en un vector, Gather se asegura de que la recolecci�n se haga
-    // en el mismo orden en el que se hace el Scatter, con lo que cada escalar
-    // acaba en su posicion correspondiente del vector.
-    MPI_Gatherv(subFinal, // Dato que envia cada proceso
-            nFilas, // Numero de elementos que se envian
-            MPI_LONG, // Tipo del dato que se envia
-            y, // Vector en el que se recolectan los datos
-            elementosPorProcesador, // Numero de datos que se esperan recibir por cada proceso
-            displrecv, // displs
-            MPI_LONG, // Tipo del dato que se recibira
-            0, // proceso que va a recibir los datos
-            MPI_COMM_WORLD); // Canal de comunicacion (Comunicador Global)
-
-    // Terminamos la ejecucion de los procesos, despues de esto solo existira
-    // el proceso 0
-    // Ojo! Esto no significa que los demas procesos no ejecuten el resto
-    // de codigo despues de "Finalize", es conveniente asegurarnos con una
-    // condicion si vamos a ejecutar mas codigo (Por ejemplo, con "if(rank==0)".
     MPI_Finalize();
 
     if (idProceso == 0) {
@@ -238,7 +223,6 @@ int main(int argc, char * argv[]) {
 
         delete [] y;
         delete [] comprueba;
-        delete [] A[0];
 
         if (errores) {
             cout << "Hubo " << errores << " errores." << endl;
@@ -253,7 +237,7 @@ int main(int argc, char * argv[]) {
 
     delete [] x;
     delete [] A;
-    delete [] misFilas;
+    delete [] subMatriz;
 
 }
 
