@@ -1,14 +1,14 @@
 /*
  ============================================================================
- Name        : matriz_x_vector.cpp
+ Name        : bidimensional_matriz_x_vector.cpp
  Author      : Jose Saldaña Mercado
  Version     :
  Copyright   : GNU Open Souce and Free license
  Description : Multiplicacion de Matrix por Vector.
-    Multiplica un vector por una matriz.
+    Multiplica un vector por una matriz, repartiendo la matriz en submatrices cuadradas que procesa cada proceso.
 
- Build: mpicxx matriz_x_vector.cpp -o mxv
- Run: mpirun --oversubscribe -np 4 mxv
+ Build: mpicxx bidimensional_matriz_x_vector.cpp -o bi_mxv
+ Run: mpirun --oversubscribe -np 4 bi_mxv
  ============================================================================
  */
 
