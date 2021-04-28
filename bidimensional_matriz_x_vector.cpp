@@ -8,7 +8,7 @@
     Multiplica un vector por una matriz, repartiendo la matriz en submatrices cuadradas que procesa cada proceso.
 
  Build: mpicxx bidimensional_matriz_x_vector.cpp -o bi_mxv
- Run: mpirun --oversubscribe -np 4 bi_mxv
+ Run: mpirun --oversubscribe -np 4 bi_mxv <n>
  ============================================================================
  */
 
@@ -65,19 +65,24 @@ int main(int argc, char * argv[]) {
         return (0);
     }
 
+    /* ---------------------------------------------------------------------------------------------------------------------------
+        Inicialización de variables
+    --------------------------------------------------------------------------------------------------------------------------- */
     int tam = n / raizP; // Dimensión de las submatrices
     int nElem = tam * tam; // Numero de elementos que procesa cada procesador
     int filaP, columnaP; // indice de cada proceso dentro de la submatriz
     A = new long [nElem]; // Reservamos los elementos de cada proceso
     x = new long [n]; // El vector sera del mismo tamaño que una fila de la matriz
+    y = new long [n]; // Reservamos especio para el resultado
+    /* ---------------------------------------------------------------------------------------------------------------------------
+        (FIN) Inicialización de variables
+    --------------------------------------------------------------------------------------------------------------------------- */
 
     MPI_Datatype MPI_BLOQUE; // Tipo de dato para reordenar la matriz y poder enviar submatrices como elementos consecutivos
 
     // Solo el proceso 0 ejecuta el siguiente bloque
     if (idProceso == 0) {
         long *auxiliar = new long[n * n];
-        // Reservamos especio para el resultado
-        y = new long [n];
 
         // Rellenamos 'auxiliar' y 'x' con valores aleatorios
         cout << "Inicio carga de datos........" << endl;
@@ -124,7 +129,10 @@ int main(int argc, char * argv[]) {
             compruebaSum += comprueba[i];
         }
 
-        // Reordenamos matriz A ------------------------------------
+        /* ---------------------------------------------------------------------------------------------------------------------------
+            Reordenación de matriz auxiliar en A
+            Para poder hacer scatter de la matriz A y que cada proceso reciba su parte
+        --------------------------------------------------------------------------------------------------------------------------- */
         // Defino el tipo bloque cuadrado
         MPI_Type_vector (tam, tam, n, MPI_LONG, &MPI_BLOQUE);
         MPI_Type_commit (&MPI_BLOQUE);
@@ -144,7 +152,6 @@ int main(int argc, char * argv[]) {
         // Libero memoria de matriz auxiliar
         delete [] auxiliar;
         MPI_Type_free (&MPI_BLOQUE);
-        // ---------------------------------------------------------
         if (n < 24) {
             cout << "La matriz reordenada es " << endl;
             for (unsigned int i = 0; i < n; i++) {
@@ -158,13 +165,27 @@ int main(int argc, char * argv[]) {
             }
             cout << "\n";
         }
+        /* ---------------------------------------------------------------------------------------------------------------------------
+            (FIN) Reordenación de matriz auxiliar en A
+        --------------------------------------------------------------------------------------------------------------------------- */
 
     } // Termina el trozo de codigo que ejecuta solo 0
 
     // Reservamos espacio para la fila local de cada proceso
     subMatriz = new long [nElem];
 
-    // Creamos comunicadores que seran necesarios:
+    /* ---------------------------------------------------------------------------------------------------------------------------
+        Creamos los comunicadores necesarios a partir de COMM_WORLD
+        - filas: reune a los elementos de una misma fila, ordenados de izquierda a derecha
+            Usaremos este comunicador para recibir y reducir los subvalores de "y" en el proceso de 
+            filas que ocupa la posición diagonal en COMM_WORLD, y desde ahí hacer gather en proceso 0
+        - columnas: reune a los elementos de una misma columna, ordenados de arriba a abajo
+            Usaremos este comunicador para recibir la parte de x que necesitan todos los procesos de 
+            una misma columna (Broadcast) desde el proceso de la columna que ocupa la posición diagonal 
+            en COMM_WORLD
+        - diagonal: usamos este comunicador para hacer scatter del vector x entre los procesos de cada columna
+            y posteriormente hacer gather de los resultados de cada fila
+    --------------------------------------------------------------------------------------------------------------------------- */
     MPI_Comm filas, columnas, diagonal; // nuevos comunicadores
 
     filaP = idProceso / raizP;
@@ -181,6 +202,34 @@ int main(int argc, char * argv[]) {
         inDiagonal = 1;
     }
     MPI_Comm_split(MPI_COMM_WORLD, inDiagonal, idProceso, &diagonal);
+    /* ---------------------------------------------------------------------------------------------------------------------------
+        (FIN) Creamos los comunicadores necesarios a partir de COMM_WORLD
+    --------------------------------------------------------------------------------------------------------------------------- */
+
+    // Repartimos datos entre los procesos: ---------------------------------------------------
+    MPI_Scatter(A, // Matriz que vamos a compartir
+        nElem, // Numero de datos a compartir
+        MPI_LONG, // Tipo de dato a enviar
+        subMatriz, // Vector en el que almacenar los datos
+        nElem, // Numero de datos a compartir
+        MPI_LONG, // Tipo de dato a recibir
+        0, // Proceso raiz que envia los datos
+        MPI_COMM_WORLD); // Comunicador utilizado (En este caso, el global)
+
+    if (inDiagonal == 1) {
+        MPI_Scatter(x, tam, MPI_LONG, x, tam, MPI_LONG, 0, diagonal); // A cada columna de procesos un trozo de x
+    }
+
+    MPI_Bcast(x, tam, MPI_LONG, columnaP, columnas); // Elemento en la diagonal reparte al resto de su columna el trozo de vector x recibido
+
+    if (n < 24) {
+            cout << "Proceso" << idProceso << ", x = [";
+        for (int i = 0; i < tam; i++) {
+            cout << " " << x[i] << " ";
+        }
+        cout << " ]" << endl;
+    }
+    // ----------------------------------------------------------------------------------------
 
     // Hacemos una barrera para asegurar que todas los procesos comiencen la ejecucion
     // a la vez, para tener mejor control del tiempo empleado
@@ -192,9 +241,9 @@ int main(int argc, char * argv[]) {
 
     for (unsigned int i = 0; i < raizP; i++) {
         subFinal[i] = 0;
-        for (unsigned int j = 0; j < n; j++) {
-            // cout << "proc=" << idProceso << ", i=" << i << ", j=" << j << ", subfinal[" << i << "] += " << subMatriz[(i * n) + j] << " * " << x[j] << endl;
-            subFinal[i] += subMatriz[(i * n) + j] * x[j];
+        for (unsigned int j = 0; j < tam; j++) {
+            cout << "proc=" << idProceso << ", i=" << i << ", j=" << j << ", subfinal[" << i << "] += " << subMatriz[(i * tam) + j] << " * " << x[j] << endl;
+            subFinal[i] += subMatriz[(i * tam) + j] * x[j];
         }
     }
 
@@ -203,6 +252,46 @@ int main(int argc, char * argv[]) {
     MPI_Barrier(MPI_COMM_WORLD);
     // fin de medicion de tiempo
     tFin = MPI_Wtime();
+
+    // int filasSize, filasRank;
+    // MPI_Comm_size(filas, &filasSize);
+    // MPI_Comm_rank(filas, &filasRank);
+    // cout << "proceso: " << idProceso << ", en fila: " << filasRank << " de " << filasSize << " reduce en " << filaP << endl;
+
+    if (n < 24) {
+        cout << "ANTES DE REDUCIR: Proceso " << idProceso << ", subVector = ["; 
+        for (int i = 0; i < raizP; i++) {
+            cout << " " << subFinal[i] << " ";
+        }
+        cout << "]" << endl;
+    }
+
+    MPI_Reduce(&subFinal[0], // Valor local de datos
+                y,  // Dato sobre el que vamos a reducir el resto
+                raizP,	  // Numero de datos que vamos a reducir
+                MPI_LONG,  // Tipo de dato que vamos a reducir
+                MPI_SUM,  // Operacion que aplicaremos
+                filaP, // proceso que va a recibir el dato reducido (elemento en la diagonal)
+                filas); // Canal de comunicacion (Filas)
+
+    if (inDiagonal == 1 && n < 24) {
+        cout << "Proceso " << idProceso << ", vector reducido = ["; 
+        for (int i = 0; i < raizP; i++) {
+            cout << " " << y[i] << " ";
+        }
+        cout << "]" << endl;
+    }
+
+    if (inDiagonal == 1) {
+        MPI_Gather(y, // Dato que envia cada proceso
+                raizP, // Numero de elementos que se envian
+                MPI_LONG, // Tipo del dato que se envia
+                y, // Vector en el que se recolectan los datos
+                raizP, // Numero de datos que se esperan recibir por cada proceso
+                MPI_LONG, // Tipo del dato que se recibira
+                0, // proceso que va a recibir los datos
+                diagonal); // Canal de comunicacion Diagonal
+    }
 
     MPI_Finalize();
 

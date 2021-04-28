@@ -8,7 +8,7 @@
     Multiplica un vector por una matriz.
 
  Build: mpicxx matriz_x_vector.cpp -o mxv
- Run: mpirun --oversubscribe -np 4 mxv
+ Run: mpirun --oversubscribe -np 4 mxv <n>
  ============================================================================
  */
 
@@ -24,7 +24,7 @@ int main(int argc, char * argv[]) {
 
     int numeroProcesadores,
             idProceso;
-    long **A, // Matriz a multiplicar
+    long    *A, // Matriz a multiplicar
             *x, // Vector que vamos a multiplicar
             *y, // Vector donde almacenamos el resultado
             *misFilas, // Las filas que almacena localmente un proceso
@@ -57,7 +57,7 @@ int main(int argc, char * argv[]) {
 
     int nFilas = n / numeroProcesadores; // Numero de filas que procesa cada procesador
     int nElem = nFilas * n; // Numero de elementos que procesa cada procesador
-    A = new long *[nElem]; // Reservamos las filas de la matriz
+    A = new long [nElem]; // Reservamos las filas de la matriz
     x = new long [n]; // El vector sera del mismo tamaño que una fila de la matriz
 
     // Variables para n % numeroProcesadores != 0
@@ -68,11 +68,7 @@ int main(int argc, char * argv[]) {
 
     // Solo el proceso 0 ejecuta el siguiente bloque
     if (idProceso == 0) {
-        A[0] = new long [n * n];
-        for (unsigned int i = 1; i < n; i++) {
-            A[i] = A[i - 1] + n; // Para poder referenciar filas dentro de la matriz A, reservada en memoria como un vector largo
-        }
-        // Reservamos especio para el resultado
+        A = new long [n * n];
         y = new long [n];
 
         // Rellenamos 'A' y 'x' con valores aleatorios
@@ -80,7 +76,7 @@ int main(int argc, char * argv[]) {
         srand(time(0));
         for (unsigned int i = 0; i < n; i++) {
             for (unsigned int j = 0; j < n; j++) {
-                A[i][j] = rand() % 1000;
+                A[i * n + j] = rand() % 1000;
             }
             x[i] = rand() % 100;
         }
@@ -91,7 +87,7 @@ int main(int argc, char * argv[]) {
             for (unsigned int i = 0; i < n; i++) {
                 for (unsigned int j = 0; j < n; j++) {
                     if (j == 0) cout << "[";
-                    cout << A[i][j];
+                    cout << A[i * n + j];
                     if (j == n - 1) cout << "]";
                     else cout << "  ";
                 }
@@ -139,7 +135,7 @@ int main(int argc, char * argv[]) {
         for (unsigned int i = 0; i < n; i++) {
             comprueba[i] = 0;
             for (unsigned int j = 0; j < n; j++) {
-                comprueba[i] += A[i][j] * x[j];
+                comprueba[i] += A[i * n + j] * x[j];
             }
         }
 	    tSecuencialFin = clock();
@@ -160,7 +156,7 @@ int main(int argc, char * argv[]) {
     // Reservamos espacio para la fila local de cada proceso
     misFilas = new long [nElem];
 
-    MPI_Scatterv(A[0], // Matriz que vamos a compartir
+    MPI_Scatterv(A, // Matriz que vamos a compartir
             elementosPorProcesador, // Numero de datos a compartir
             displenv, // Desplazamiento dentro de los datos a compartir
             MPI_LONG, // Tipo de dato a enviar
@@ -238,7 +234,6 @@ int main(int argc, char * argv[]) {
 
         delete [] y;
         delete [] comprueba;
-        delete [] A[0];
 
         if (errores) {
             cout << "Hubo " << errores << " errores." << endl;
