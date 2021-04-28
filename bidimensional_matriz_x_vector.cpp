@@ -237,12 +237,12 @@ int main(int argc, char * argv[]) {
     // Inicio de medicion de tiempo
     tInicio = MPI_Wtime();
 
-    long *subFinal = new long [raizP];
+    long *subFinal = new long [tam];
 
-    for (unsigned int i = 0; i < raizP; i++) {
+    for (unsigned int i = 0; i < tam; i++) {
         subFinal[i] = 0;
         for (unsigned int j = 0; j < tam; j++) {
-            cout << "proc=" << idProceso << ", i=" << i << ", j=" << j << ", subfinal[" << i << "] += " << subMatriz[(i * tam) + j] << " * " << x[j] << endl;
+            // cout << "proc=" << idProceso << ", i=" << i << ", j=" << j << ", subfinal[" << i << "] += " << subMatriz[(i * tam) + j] << " * " << x[j] << endl;
             subFinal[i] += subMatriz[(i * tam) + j] * x[j];
         }
     }
@@ -260,7 +260,7 @@ int main(int argc, char * argv[]) {
 
     if (n < 24) {
         cout << "ANTES DE REDUCIR: Proceso " << idProceso << ", subVector = ["; 
-        for (int i = 0; i < raizP; i++) {
+        for (int i = 0; i < tam; i++) {
             cout << " " << subFinal[i] << " ";
         }
         cout << "]" << endl;
@@ -268,7 +268,7 @@ int main(int argc, char * argv[]) {
 
     MPI_Reduce(&subFinal[0], // Valor local de datos
                 y,  // Dato sobre el que vamos a reducir el resto
-                raizP,	  // Numero de datos que vamos a reducir
+                tam,	  // Numero de datos que vamos a reducir
                 MPI_LONG,  // Tipo de dato que vamos a reducir
                 MPI_SUM,  // Operacion que aplicaremos
                 filaP, // proceso que va a recibir el dato reducido (elemento en la diagonal)
@@ -276,7 +276,7 @@ int main(int argc, char * argv[]) {
 
     if (inDiagonal == 1 && n < 24) {
         cout << "Proceso " << idProceso << ", vector reducido = ["; 
-        for (int i = 0; i < raizP; i++) {
+        for (int i = 0; i < tam; i++) {
             cout << " " << y[i] << " ";
         }
         cout << "]" << endl;
@@ -284,10 +284,10 @@ int main(int argc, char * argv[]) {
 
     if (inDiagonal == 1) {
         MPI_Gather(y, // Dato que envia cada proceso
-                raizP, // Numero de elementos que se envian
+                tam, // Numero de elementos que se envian
                 MPI_LONG, // Tipo del dato que se envia
                 y, // Vector en el que se recolectan los datos
-                raizP, // Numero de datos que se esperan recibir por cada proceso
+                tam, // Numero de datos que se esperan recibir por cada proceso
                 MPI_LONG, // Tipo del dato que se recibira
                 0, // proceso que va a recibir los datos
                 diagonal); // Canal de comunicacion Diagonal
